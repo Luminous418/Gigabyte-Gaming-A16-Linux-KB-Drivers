@@ -1,4 +1,4 @@
-# GG-A16_linuxdrivers
+# GIGABYTE GAMING A16 Linux Keyboard guide
 
 Linux support for the **GIGABYTE GAMING A16 (CTH)** laptop. Currently this
 repo provides full control of the **RGB keyboard backlight**.
