@@ -1,0 +1,245 @@
+#!/usr/bin/env python3
+"""Control the RGB keyboard backlight of the GIGABYTE GAMING A16 via HID LampArray.
+
+The A16 keyboard is a USB-HID device (VID 0414, PID 8105). One of its HID
+interfaces exposes the Microsoft HID LampArray protocol (Usage Page 0x59,
+"Lighting and Illumination"). There is no /sys/class/leds entry for it, which
+is why the backlight stays off on Linux cold boots: on Windows, the Gigabyte
+Control Center sends the LampArray feature reports at startup and the keyboard
+keeps that state until it loses power.
+
+This script talks directly to the hidraw node with the standard hidraw ioctls
+(HIDIOCSFEATURE / HIDIOCGFEATURE), so it has no dependencies beyond python3.
+
+Report map (from the device report descriptor):
+  0x01  LampArrayAttributesReport (read)  -> LampCount, kind, bbox
+  0x05  LampRangeUpdateReport (write)     -> flags, id_start, id_end, R, G, B, I
+  0x06  LampArrayControlReport (write)    -> AutonomousMode
+"""
+
+import argparse
+import array
+import fcntl
+import glob
+import os
+import struct
+import sys
+
+VENDOR_ID = "0414"
+PRODUCT_ID = "8105"
+
+CONFIG_PATH = os.environ.get(
+    "GIGABYTE_KBD_CONFIG",
+    os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config")),
+                 "gigabyte-kbd.conf"),
+)
+DEFAULT_COLOR = "ffffff"
+DEFAULT_INTENSITY = 255
+
+ATTR_REPORT_ID = 0x01
+ATTR_REPORT_SIZE = 23  # 1 id + 2 LampCount + 5 * 4 bbox/kind/interval
+RANGE_REPORT_ID = 0x05
+CONTROL_REPORT_ID = 0x06
+
+LAMP_KINDS = {
+    0: "Undefined",
+    1: "Keyboard",
+    2: "Mouse",
+    3: "GameController",
+    4: "Peripheral",
+    5: "Scene",
+    6: "Notification",
+    7: "Chassis",
+    8: "Wearable",
+    9: "Furniture",
+}
+
+
+def _hidioctl(nr, size):
+    # _IOWR('H', nr, size)  ->  _IOC(_IOC_READ | _IOC_WRITE, 'H', nr, size)
+    return 0xC0000000 | (size << 16) | (ord("H") << 8) | nr
+
+
+def find_device():
+    """Return the /dev/hidraw* node of the GIGABYTE LampArray interface."""
+    for dev in glob.glob("/sys/class/hidraw/hidraw*/device"):
+        try:
+            with open(os.path.join(dev, "uevent")) as fh:
+                uevent = fh.read()
+            if f"0000{VENDOR_ID}:0000{PRODUCT_ID}" not in uevent.upper():
+                continue
+            with open(os.path.join(dev, "report_descriptor"), "rb") as fh:
+                rd = fh.read()
+            if b"\x05\x59" in rd:  # Usage Page 0x59 = Lighting and Illumination
+                return "/dev/" + os.path.basename(os.path.dirname(dev))
+        except OSError:
+            continue
+    sys.exit("Error: GIGABYTE LampArray (0414:8105) device not found")
+
+
+def get_feature_report(fd, report_id, size):
+    buf = array.array("B", [report_id] + [0] * (size - 1))
+    fcntl.ioctl(fd, _hidioctl(0x07, size), buf)
+    return bytes(buf)
+
+
+def set_feature_report(fd, data):
+    buf = array.array("B", data)
+    fcntl.ioctl(fd, _hidioctl(0x06, len(data)), buf)
+
+
+def get_attributes(fd):
+    rep = get_feature_report(fd, ATTR_REPORT_ID, ATTR_REPORT_SIZE)
+    lamp_count = struct.unpack_from("<H", rep, 1)[0]
+    w, h, d, kind, interval = struct.unpack_from("<IIIII", rep, 3)
+    return {
+        "lamp_count": lamp_count,
+        "width": w,
+        "height": h,
+        "depth": d,
+        "kind": kind,
+        "min_interval": interval,
+    }
+
+
+def set_autonomous(fd, enabled):
+    set_feature_report(fd, [CONTROL_REPORT_ID, 1 if enabled else 0])
+
+
+def set_color_range(fd, start, end, r, g, b, intensity=255, flags=0x01):
+    data = [RANGE_REPORT_ID, flags]
+    data += [start & 0xFF, start >> 8]
+    data += [end & 0xFF, end >> 8]
+    data += [r, g, b, intensity]
+    set_feature_report(fd, data)
+
+
+def read_config():
+    cfg = {"color": DEFAULT_COLOR, "intensity": str(DEFAULT_INTENSITY)}
+    try:
+        with open(CONFIG_PATH) as fh:
+            for line in fh:
+                line = line.strip()
+                if "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    cfg[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return cfg
+
+
+def write_config(color, intensity):
+    directory = os.path.dirname(CONFIG_PATH)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(CONFIG_PATH, "w") as fh:
+        fh.write("# GIGABYTE GAMING A16 keyboard backlight\n")
+        fh.write("color={}\n".format(color))
+        fh.write("intensity={}\n".format(intensity))
+
+
+def parse_color(hexc):
+    hexc = hexc.lstrip("#")
+    if len(hexc) != 6:
+        sys.exit("Error: color must be RRGGBB (e.g. ffffff)")
+    return int(hexc[0:2], 16), int(hexc[2:4], 16), int(hexc[4:6], 16), hexc
+
+
+def cmd_info(args):
+    fd = os.open(find_device(), os.O_RDWR)
+    try:
+        attrs = get_attributes(fd)
+        kind = LAMP_KINDS.get(attrs["kind"], "Unknown")
+        print(f"Device:       /dev/{os.path.basename(find_device())}")
+        print(f"Lamp count:   {attrs['lamp_count']}")
+        print(f"Kind:         {kind} ({attrs['kind']})")
+        print(
+            f"Bounding box: {attrs['width']}x{attrs['height']}x{attrs['depth']} µm"
+        )
+        print(f"Min interval: {attrs['min_interval']} µs")
+    finally:
+        os.close(fd)
+
+
+def cmd_color(args):
+    r, g, b, hexc = parse_color(args.color)
+    fd = os.open(find_device(), os.O_RDWR)
+    try:
+        attrs = get_attributes(fd)
+        count = max(attrs["lamp_count"], 1)
+        set_autonomous(fd, False)
+        set_color_range(fd, 0, count - 1, r, g, b, args.intensity)
+        write_config(hexc, args.intensity)
+        print(f"Set color #{hexc} intensity={args.intensity} on {count} lamp(s)")
+    finally:
+        os.close(fd)
+
+
+def cmd_on(args):
+    cmd_color(type("args", (), {"color": DEFAULT_COLOR,
+                                "intensity": DEFAULT_INTENSITY})())
+
+
+def cmd_off(args):
+    fd = os.open(find_device(), os.O_RDWR)
+    try:
+        attrs = get_attributes(fd)
+        count = max(attrs["lamp_count"], 1)
+        set_autonomous(fd, False)
+        set_color_range(fd, 0, count - 1, 0, 0, 0, 0)
+        write_config("000000", 0)
+        print("Backlight off")
+    finally:
+        os.close(fd)
+
+
+def cmd_restore(args):
+    cfg = read_config()
+    r, g, b, hexc = parse_color(cfg["color"])
+    intensity = int(cfg.get("intensity", DEFAULT_INTENSITY))
+    fd = os.open(find_device(), os.O_RDWR)
+    try:
+        attrs = get_attributes(fd)
+        count = max(attrs["lamp_count"], 1)
+        set_autonomous(fd, False)
+        set_color_range(fd, 0, count - 1, r, g, b, intensity)
+        print(f"Restored #{hexc} intensity={intensity} on {count} lamp(s)")
+    finally:
+        os.close(fd)
+
+
+def cmd_auto(args):
+    fd = os.open(find_device(), os.O_RDWR)
+    try:
+        set_autonomous(fd, True)
+        print("Autonomous mode re-enabled")
+    finally:
+        os.close(fd)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Control GIGABYTE GAMING A16 RGB keyboard (HID LampArray)"
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("info", help="show lamp array attributes")
+    sub.add_parser("on", help="turn backlight on (white, full)")
+    sub.add_parser("off", help="turn backlight off")
+    sub.add_parser("restore", help="restore last saved color from config")
+    sub.add_parser("auto", help="re-enable autonomous (firmware) mode")
+
+    p_color = sub.add_parser("color", help="set solid color (RRGGBB)")
+    p_color.add_argument("color", help="hex color, e.g. ffffff")
+    p_color.add_argument(
+        "--intensity", type=int, default=DEFAULT_INTENSITY,
+        help="intensity 0-255 (default 255)",
+    )
+
+    args = parser.parse_args()
+    {"info": cmd_info, "on": cmd_on, "off": cmd_off, "color": cmd_color,
+     "restore": cmd_restore, "auto": cmd_auto}[args.command](args)
+
+
+if __name__ == "__main__":
+    main()

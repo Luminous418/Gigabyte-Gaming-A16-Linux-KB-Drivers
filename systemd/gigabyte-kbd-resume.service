@@ -1,0 +1,17 @@
+# Optional: re-apply the keyboard backlight after suspend/resume.
+# Restores from the machine-wide default at /etc/gigabyte-kbd.conf.
+# Enable with:  sudo systemctl enable --now gigabyte-kbd-resume.service
+[Unit]
+Description=Restore GIGABYTE A16 keyboard backlight after resume
+Before=sleep.target
+StopWhenUnneeded=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=GIGABYTE_KBD_CONFIG=/etc/gigabyte-kbd.conf
+ExecStart=/bin/true
+ExecStop=/usr/local/bin/gigabyte-kbd restore
+
+[Install]
+WantedBy=sleep.target
