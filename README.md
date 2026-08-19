@@ -49,8 +49,8 @@ Two extra quirks of this keyboard were discovered during development:
 ## Installation
 
 ```bash
-git clone https://github.com/Luminous418/Gigabyte-Gaming-A16-Linux-Drivers.git
-cd Gigabyte-Gaming-A16-Linux-Drivers
+git clone https://github.com/Luminous418/Gigabyte-Gaming-A16-Linux-KB-Drivers.git
+cd Gigabyte-Gaming-A16-Linux-KB-Drivers
 sudo ./install.sh
 ```
 
