@@ -26,7 +26,7 @@ echo "Reloaded udev rules"
 
 install -Dm644 "$SCRIPT_DIR/systemd/gigabyte-kbd.service" \
     "$SYSTEMD_USER_DIR/gigabyte-kbd.service"
-echo "Installed user systemd unit (login autostart)"
+echo "Installed user systemd unit (login restore)"
 
 install -Dm644 "$SCRIPT_DIR/systemd/gigabyte-kbd-resume.service" \
     "$SYSTEMD_SYSTEM_DIR/gigabyte-kbd-resume.service"
@@ -56,8 +56,10 @@ fi
 echo
 echo "--- Testing ---"
 "$BIN" info
-"$BIN" on
-echo "Backlight should be ON (white). Try:"
-echo "  $BIN color ff0000   # red"
+"$BIN" color ffffff
+echo "Backlight should be ON (white, host mode - autonomous NOT touched)."
+echo "Try:"
+echo "  $BIN color ff0000       # red (host mode, exact color)"
+echo "  $BIN color ff0000 --auto   # red + autonomous (Fn+Space cycles)"
 echo "  $BIN off"
 echo "  $BIN restore"

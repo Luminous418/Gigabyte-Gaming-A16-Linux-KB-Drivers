@@ -1,0 +1,12 @@
+[Unit]
+Description=GIGABYTE A16 keyboard Fn+Space backlight watcher
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/gigabyte-kbd-watch
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

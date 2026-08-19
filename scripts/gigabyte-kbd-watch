@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""Watch the GIGABYTE A16 keyboard for Fn+Space and cycle the backlight
+brightness levels, like Windows.
+
+The A16 keyboard sends KEY_F20 (0xbe) when Fn+Space is pressed (and declares
+KEY_KBDILLUMUP/DOWN/TOGGLE for finer steps). This daemon listens on the
+keyboard's input devices and translates those keys into brightness changes
+through the HID LampArray tool.
+
+Run it as a user systemd service (see systemd/gigabyte-kbd-watch.service).
+"""
+
+import importlib.machinery
+import importlib.util
+import os
+import select
+import struct
+import sys
+import time
+
+KBD_SCRIPT = "/usr/local/bin/gigabyte-kbd"
+
+KEY_TOGGLE = {0xBE: "Fn+Space", 0xE4: "KbdIllumToggle"}   # cycle level
+KEY_UP = {0xE6: "KbdIllumUp"}
+KEY_DOWN = {0xE5: "KbdIllumDown"}
+
+LEVELS = [0, 64, 128, 255]  # off, low, medium, high (matches Windows steps)
+
+DEBOUNCE_SECONDS = 0.12
+
+
+def load_tool():
+    loader = importlib.machinery.SourceFileLoader(
+        "gigabyte_kbd", KBD_SCRIPT)
+    spec = importlib.util.spec_from_loader("gigabyte_kbd", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+def find_input_nodes():
+    nodes = []
+    for ev in sorted(__import__("glob").glob("/dev/input/event*")):
+        try:
+            target = os.path.realpath(
+                f"/sys/class/input/{os.path.basename(ev)}/device/device")
+            if "0414:8105" in target:
+                nodes.append(ev)
+        except OSError:
+            continue
+    if not nodes:
+        sys.exit("Error: no GIGABYTE keyboard input devices found")
+    return nodes
+
+
+def nearest_level(intensity):
+    return min(range(len(LEVELS)), key=lambda i: abs(LEVELS[i] - intensity))
+
+
+def apply_intensity(mod, intensity):
+    cfg = mod.read_config()
+    r, g, b, hexc = mod.parse_color(cfg["color"])
+    fd = os.open(mod.find_device(), os.O_RDWR)
+    try:
+        attrs = mod.get_attributes(fd)
+        count = max(attrs["lamp_count"], 1)
+        mod.set_autonomous(fd, False)
+        mod.set_color_range(fd, 0, count - 1, r, g, b, intensity)
+        mod.write_config(hexc, intensity)
+    finally:
+        os.close(fd)
+    print(f"backlight level {LEVELS[nearest_level(intensity)]} "
+          f"(intensity {intensity}, color #{hexc})", flush=True)
+
+
+def main():
+    mod = load_tool()
+    nodes = find_input_nodes()
+    print("watching:", ", ".join(nodes), flush=True)
+
+    cfg = mod.read_config()
+    idx = nearest_level(int(cfg.get("intensity", 255)))
+    last = 0.0
+
+    fds = {os.open(n, os.O_RDONLY | os.O_NONBLOCK): n for n in nodes}
+    try:
+        while True:
+            r, _, _ = select.select(list(fds), [], [], 60)
+            for fd in r:
+                while True:
+                    try:
+                        data = os.read(fd, 256)
+                    except (OSError, BlockingIOError):
+                        break
+                    if not data:
+                        break
+                    for off in range(0, len(data) - 15, 16):
+                        _, _, typ, code, val = struct.unpack_from(
+                            "IIHHi", data, off)
+                        if typ != 1 or val != 1:
+                            continue
+                        now = time.monotonic()
+                        if now - last < DEBOUNCE_SECONDS:
+                            continue
+                        last = now
+                        if code in KEY_TOGGLE:
+                            idx = (idx + 1) % len(LEVELS)
+                            print(f"event {KEY_TOGGLE[code]} -> level {idx}", flush=True)
+                            apply_intensity(mod, LEVELS[idx])
+                        elif code in KEY_UP:
+                            idx = min(idx + 1, len(LEVELS) - 1)
+                            print(f"event {KEY_UP[code]} -> level {idx}", flush=True)
+                            apply_intensity(mod, LEVELS[idx])
+                        elif code in KEY_DOWN:
+                            idx = max(idx - 1, 0)
+                            print(f"event {KEY_DOWN[code]} -> level {idx}", flush=True)
+                            apply_intensity(mod, LEVELS[idx])
+    except KeyboardInterrupt:
+        pass
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+
+if __name__ == "__main__":
+    main()

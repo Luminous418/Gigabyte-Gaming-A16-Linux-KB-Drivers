@@ -13,7 +13,7 @@ This script talks directly to the hidraw node with the standard hidraw ioctls
 
 Report map (from the device report descriptor):
   0x01  LampArrayAttributesReport (read)  -> LampCount, kind, bbox
-  0x05  LampRangeUpdateReport (write)     -> flags, id_start, id_end, R, G, B, I
+  0x05  LampRangeUpdateReport (write)     -> set a lamp range to one RGB + intensity
   0x06  LampArrayControlReport (write)    -> AutonomousMode
 """
 
@@ -114,6 +114,30 @@ def set_color_range(fd, start, end, r, g, b, intensity=255, flags=0x01):
     set_feature_report(fd, data)
 
 
+def apply_color(fd, r, g, b, intensity, count):
+    # This device reports intensity_lvls=1, so the LampArray intensity
+    # channel is effectively on/off only. Emulate brightness steps by
+    # scaling the RGB values instead.
+    scale = max(0, min(255, intensity)) / 255.0
+    r2 = round(r * scale)
+    g2 = round(g * scale)
+    b2 = round(b * scale)
+    set_color_range(fd, 0, count - 1, r2, g2, b2, 255)
+
+
+def set_color_and_auto(fd, r, g, b, intensity, count, autonomous):
+    # Apply the color in host mode (autonomous off). Optionally hand control
+    # back to the firmware afterwards. NOTE: the firmware does NOT store the
+    # host color for its autonomous mode - that color is set by Windows
+    # GiMate and resets to off on a full power cycle. In autonomous mode the
+    # keyboard's own Fn+Space cycles brightness natively using its stored
+    # color (black after a fresh power-off, or the last GiMate color).
+    set_autonomous(fd, False)
+    apply_color(fd, r, g, b, intensity, count)
+    if autonomous:
+        set_autonomous(fd, True)
+
+
 def read_config():
     cfg = {"color": DEFAULT_COLOR, "intensity": str(DEFAULT_INTENSITY)}
     try:
@@ -167,27 +191,29 @@ def cmd_color(args):
     try:
         attrs = get_attributes(fd)
         count = max(attrs["lamp_count"], 1)
-        set_autonomous(fd, False)
-        set_color_range(fd, 0, count - 1, r, g, b, args.intensity)
+        set_color_and_auto(fd, r, g, b, args.intensity, count, args.auto)
         write_config(hexc, args.intensity)
-        print(f"Set color #{hexc} intensity={args.intensity} on {count} lamp(s)")
+        mode = "autonomous (Fn+Space works)" if args.auto else "host mode"
+        print(f"Set color #{hexc} intensity={args.intensity} "
+              f"({mode}) on {count} lamp(s)")
     finally:
         os.close(fd)
 
 
 def cmd_on(args):
     cmd_color(type("args", (), {"color": DEFAULT_COLOR,
-                                "intensity": DEFAULT_INTENSITY})())
+                                "intensity": DEFAULT_INTENSITY,
+                                "auto": False})())
 
 
 def cmd_off(args):
+    cfg = read_config()
     fd = os.open(find_device(), os.O_RDWR)
     try:
         attrs = get_attributes(fd)
         count = max(attrs["lamp_count"], 1)
-        set_autonomous(fd, False)
-        set_color_range(fd, 0, count - 1, 0, 0, 0, 0)
-        write_config("000000", 0)
+        set_color_and_auto(fd, 0, 0, 0, 0, count, autonomous=False)
+        write_config(cfg.get("color", DEFAULT_COLOR), 0)
         print("Backlight off")
     finally:
         os.close(fd)
@@ -201,9 +227,10 @@ def cmd_restore(args):
     try:
         attrs = get_attributes(fd)
         count = max(attrs["lamp_count"], 1)
-        set_autonomous(fd, False)
-        set_color_range(fd, 0, count - 1, r, g, b, intensity)
-        print(f"Restored #{hexc} intensity={intensity} on {count} lamp(s)")
+        set_color_and_auto(fd, r, g, b, intensity, count,
+                           autonomous=args.auto)
+        mode = "autonomous (Fn+Space works)" if args.auto else "host mode"
+        print(f"Restored #{hexc} intensity={intensity} ({mode})")
     finally:
         os.close(fd)
 
@@ -212,7 +239,7 @@ def cmd_auto(args):
     fd = os.open(find_device(), os.O_RDWR)
     try:
         set_autonomous(fd, True)
-        print("Autonomous mode re-enabled")
+        print("Autonomous mode enabled (firmware color, Fn+Space cycles)")
     finally:
         os.close(fd)
 
@@ -226,14 +253,24 @@ def main():
     sub.add_parser("info", help="show lamp array attributes")
     sub.add_parser("on", help="turn backlight on (white, full)")
     sub.add_parser("off", help="turn backlight off")
-    sub.add_parser("restore", help="restore last saved color from config")
-    sub.add_parser("auto", help="re-enable autonomous (firmware) mode")
+    sub.add_parser("auto", help="enable autonomous (firmware) mode, Fn+Space works")
+
+    p_restore = sub.add_parser("restore", help="restore last saved color from config")
+    p_restore.add_argument(
+        "--auto", action="store_true",
+        help="also enable autonomous mode (Fn+Space; uses firmware color)",
+    )
 
     p_color = sub.add_parser("color", help="set solid color (RRGGBB)")
     p_color.add_argument("color", help="hex color, e.g. ffffff")
     p_color.add_argument(
         "--intensity", type=int, default=DEFAULT_INTENSITY,
-        help="intensity 0-255 (default 255)",
+        help="brightness 0-255 (default 255); emulated via RGB scaling",
+    )
+    p_color.add_argument(
+        "--auto", action="store_true",
+        help="after setting the color, enable autonomous mode "
+             "(Fn+Space cycles firmware color, not this one)",
     )
 
     args = parser.parse_args()
