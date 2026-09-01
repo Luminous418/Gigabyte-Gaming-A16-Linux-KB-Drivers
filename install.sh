@@ -44,11 +44,16 @@ echo "Installed resume hook (enable with: systemctl enable --now gigabyte-kbd-re
 if [[ -n "${SUDO_USER:-}" ]]; then
     uid="$(id -u "$SUDO_USER")"
     if [[ -d "/run/user/$uid" ]]; then
-        XDG_RUNTIME_DIR="/run/user/$uid" \
-            systemctl --user daemon-reload || true
-        XDG_RUNTIME_DIR="/run/user/$uid" \
-            systemctl --user enable gigabyte-kbd.service || true
-        echo "Enabled login autostart for user $SUDO_USER"
+        if command -v sudo >/dev/null 2>&1 && \
+            sudo -u "$SUDO_USER" env \
+                DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+                XDG_RUNTIME_DIR="/run/user/$uid" \
+                systemctl --user enable --now gigabyte-kbd.service; then
+            echo "Enabled login autostart for user $SUDO_USER"
+        else
+            echo "NOTE: could not enable via sudo; run as $SUDO_USER:"
+            echo "      systemctl --user enable --now gigabyte-kbd.service"
+        fi
     else
         echo "NOTE: no running session for $SUDO_USER; run later:"
         echo "      systemctl --user enable --now gigabyte-kbd.service"
