@@ -11,7 +11,7 @@ Type=oneshot
 RemainAfterExit=yes
 Environment=GIGABYTE_KBD_CONFIG=/etc/gigabyte-kbd.conf
 ExecStart=/bin/true
-ExecStop=/usr/local/bin/gigabyte-kbd restore
+ExecStop=/usr/local/bin/gigabyte-kbd startup
 
 [Install]
 WantedBy=sleep.target

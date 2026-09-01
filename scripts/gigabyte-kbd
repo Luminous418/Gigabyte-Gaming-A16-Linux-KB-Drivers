@@ -35,6 +35,8 @@ CONFIG_PATH = os.environ.get(
 )
 DEFAULT_COLOR = "ffffff"
 DEFAULT_INTENSITY = 255
+STARTUP_COLOR = "00aaff"
+STARTUP_INTENSITY = 255
 
 ATTR_REPORT_ID = 0x01
 ATTR_REPORT_SIZE = 23  # 1 id + 2 LampCount + 5 * 4 bbox/kind/interval
@@ -139,7 +141,12 @@ def set_color_and_auto(fd, r, g, b, intensity, count, autonomous):
 
 
 def read_config():
-    cfg = {"color": DEFAULT_COLOR, "intensity": str(DEFAULT_INTENSITY)}
+    cfg = {
+        "color": DEFAULT_COLOR,
+        "intensity": str(DEFAULT_INTENSITY),
+        "startup_color": STARTUP_COLOR,
+        "startup_intensity": str(STARTUP_INTENSITY),
+    }
     try:
         with open(CONFIG_PATH) as fh:
             for line in fh:
@@ -152,7 +159,7 @@ def read_config():
     return cfg
 
 
-def write_config(color, intensity):
+def write_config(color, intensity, startup_color=None, startup_intensity=None):
     directory = os.path.dirname(CONFIG_PATH)
     if directory:
         os.makedirs(directory, exist_ok=True)
@@ -160,6 +167,10 @@ def write_config(color, intensity):
         fh.write("# GIGABYTE GAMING A16 keyboard backlight\n")
         fh.write("color={}\n".format(color))
         fh.write("intensity={}\n".format(intensity))
+        fh.write("startup_color={}\n".format(
+            startup_color if startup_color is not None else STARTUP_COLOR))
+        fh.write("startup_intensity={}\n".format(
+            startup_intensity if startup_intensity is not None else STARTUP_INTENSITY))
 
 
 def parse_color(hexc):
@@ -244,6 +255,23 @@ def cmd_auto(args):
         os.close(fd)
 
 
+def cmd_startup(args):
+    # A fixed startup color applied at every login. Reads startup_color /
+    # startup_intensity (default 00aaff/255) so the boot color is stable even
+    # if the last-used color was changed during the session.
+    cfg = read_config()
+    r, g, b, hexc = parse_color(cfg.get("startup_color", STARTUP_COLOR))
+    intensity = int(cfg.get("startup_intensity", STARTUP_INTENSITY))
+    fd = os.open(find_device(), os.O_RDWR)
+    try:
+        attrs = get_attributes(fd)
+        count = max(attrs["lamp_count"], 1)
+        set_color_and_auto(fd, r, g, b, intensity, count, autonomous=False)
+        print(f"Startup #{hexc} intensity={intensity} (host mode)")
+    finally:
+        os.close(fd)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Control GIGABYTE GAMING A16 RGB keyboard (HID LampArray)"
@@ -254,6 +282,7 @@ def main():
     sub.add_parser("on", help="turn backlight on (white, full)")
     sub.add_parser("off", help="turn backlight off")
     sub.add_parser("auto", help="enable autonomous (firmware) mode, Fn+Space works")
+    sub.add_parser("startup", help="apply fixed startup color (default 00aaff)")
 
     p_restore = sub.add_parser("restore", help="restore last saved color from config")
     p_restore.add_argument(
@@ -275,7 +304,8 @@ def main():
 
     args = parser.parse_args()
     {"info": cmd_info, "on": cmd_on, "off": cmd_off, "color": cmd_color,
-     "restore": cmd_restore, "auto": cmd_auto}[args.command](args)
+     "restore": cmd_restore, "auto": cmd_auto,
+     "startup": cmd_startup}[args.command](args)
 
 
 if __name__ == "__main__":

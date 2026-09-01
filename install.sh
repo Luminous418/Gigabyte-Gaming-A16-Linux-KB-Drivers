@@ -33,8 +33,10 @@ install -Dm644 "$SCRIPT_DIR/systemd/gigabyte-kbd-resume.service" \
 if [[ ! -f "$MACHINE_CONFIG" ]]; then
     cat > "$MACHINE_CONFIG" <<'EOF'
 # GIGABYTE GAMING A16 keyboard backlight default (used on resume)
-color=ffffff
+color=00aaff
 intensity=255
+startup_color=00aaff
+startup_intensity=255
 EOF
 fi
 echo "Installed resume hook (enable with: systemctl enable --now gigabyte-kbd-resume.service)"
@@ -61,5 +63,5 @@ echo "Backlight should be ON (white, host mode - autonomous NOT touched)."
 echo "Try:"
 echo "  $BIN color ff0000       # red (host mode, exact color)"
 echo "  $BIN color ff0000 --auto   # red + autonomous (Fn+Space cycles)"
+echo "  $BIN startup            # fixed startup color (cyan 00aaff)"
 echo "  $BIN off"
-echo "  $BIN restore"

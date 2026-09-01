@@ -59,8 +59,8 @@ sudo ./install.sh
 1. Copy `scripts/gigabyte-kbd` to `/usr/local/bin/gigabyte-kbd`
 2. Install a udev rule granting `input`-group access to the keyboard's
    hidraw nodes (so you don't need root for day-to-day use)
-3. Install a **user** systemd unit that restores the backlight at login
-   (this fixes the cold-boot problem)
+3. Install a **user** systemd unit that applies the fixed startup color
+   (`startup_color`, default cyan) at login (this fixes the cold-boot problem)
 4. Install an optional resume hook for after suspend (`systemctl enable
    --now gigabyte-kbd-resume.service`)
 5. Run a quick test
@@ -73,14 +73,17 @@ gigabyte-kbd on                          # white, full brightness (host mode)
 gigabyte-kbd color ff0000                # red (host mode)
 gigabyte-kbd color 00ff00 --intensity 128   # green at half brightness
 gigabyte-kbd off                         # turn off (host mode)
-gigabyte-kbd restore                     # re-apply last saved color (host mode)
+gigabyte-kbd startup                     # fixed startup color (cyan 00aaff)
 gigabyte-kbd auto                        # enable autonomous mode: Fn+Space works
 gigabyte-kbd color 00aaff --auto         # set color, then enable autonomous
 gigabyte-kbd restore --auto              # restore, then enable autonomous
 ```
 
 `color`, `on` and `off` save their value to
-`~/.config/gigabyte-kbd.conf`, which `restore` uses on login.
+`~/.config/gigabyte-kbd.conf`. `restore` re-applies the last saved color, and
+`startup` applies the fixed `startup_color` (default `00aaff`) every login
+— so the backlight color at boot is stable even if you changed the color
+during the previous session.
 
 **Two modes:**
 
