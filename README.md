@@ -11,7 +11,7 @@ rebooting into Linux.
 
 ### Why
 
-The A16 keyboard is a USB-HID device (VID `0414`, PID `8105`) and its
+The A16 keyboard is a USB-HID device (VID `0414`, PID `8105` or `8104`) and its
 backlight is **not** exposed through `/sys/class/leds`. One of its HID
 interfaces instead implements the standard Microsoft **HID LampArray**
 protocol (Usage Page `0x59`, "Lighting and Illumination"):
@@ -20,6 +20,13 @@ protocol (Usage Page `0x59`, "Lighting and Illumination"):
 $ xxd /sys/bus/hid/devices/0003:0414:8105.0008/report_descriptor | head
 00000000  05 59 09 01 a1 01 85 01  ...
 ```
+
+**Note:** The product ID may vary by model/revision (e.g. `8105` or `8104`). The
+installer automatically detects the connected device's IDs at install time and
+persists them to `/etc/gigabyte-kbd.conf`. The `gigabyte-kbd` tool also
+auto-detects the device at runtime by matching VID `0414` + the LampArray
+usage page, with optional PID filtering from config or environment
+(`GIGABYTE_KBD_VID`, `GIGABYTE_KBD_PID`).
 
 Backlight state is applied by *host software*: on Windows, Gigabyte Control
 Center / GiMate sends the LampArray feature reports at startup, and the

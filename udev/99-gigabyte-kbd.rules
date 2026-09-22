@@ -1,4 +1,6 @@
 # GIGABYTE GAMING A16 keyboard backlight (HID LampArray)
 # Grant access to the keyboard's hidraw interfaces for members of the
 # "input" group so the gigabyte-kbd tool can talk to it without root.
+# The product ID is detected at install time by install.sh (e.g. 8105, 8104).
 KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0414", ATTRS{idProduct}=="8105", MODE="0660", GROUP="input"
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0414", ATTRS{idProduct}=="8104", MODE="0660", GROUP="input"

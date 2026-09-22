@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Control the RGB keyboard backlight of the GIGABYTE GAMING A16 via HID LampArray.
 
-The A16 keyboard is a USB-HID device (VID 0414, PID 8105). One of its HID
+The A16 keyboard is a USB-HID device (VID 0414, PID 8105 or 8104). One of its HID
 interfaces exposes the Microsoft HID LampArray protocol (Usage Page 0x59,
 "Lighting and Illumination"). There is no /sys/class/leds entry for it, which
 is why the backlight stays off on Linux cold boots: on Windows, the Gigabyte
@@ -26,7 +26,6 @@ import struct
 import sys
 
 VENDOR_ID = "0414"
-PRODUCT_ID = "8105"
 
 CONFIG_PATH = os.environ.get(
     "GIGABYTE_KBD_CONFIG",
@@ -62,21 +61,66 @@ def _hidioctl(nr, size):
     return 0xC0000000 | (size << 16) | (ord("H") << 8) | nr
 
 
+def _scan_uevent_id(uevent):
+    """Extract (vid, pid) from a hidraw uevent HID_ID= line."""
+    for line in uevent.splitlines():
+        if line.startswith("HID_ID="):
+            try:
+                parts = line.split(":", 2)
+                return parts[1].lower()[-4:], parts[2].lower()[-4:]
+            except (IndexError, ValueError):
+                pass
+    return None, None
+
+
+def _has_lamparray(desc_path):
+    try:
+        with open(desc_path, "rb") as fh:
+            return b"\x05\x59" in fh.read()
+    except OSError:
+        return False
+
+
+def detect_ids():
+    """Return (vid, pid) of the LampArray interface, or (None, None)."""
+    for uevent_path in glob.glob("/sys/class/hidraw/hidraw*/device/uevent"):
+        try:
+            with open(uevent_path) as fh:
+                vid, pid = _scan_uevent_id(fh.read())
+        except OSError:
+            continue
+        if not vid or vid != VENDOR_ID:
+            continue
+        if _has_lamparray(os.path.join(os.path.dirname(uevent_path),
+                                       "report_descriptor")):
+            return vid, pid
+    return None, None
+
+
+def _wanted_ids():
+    """Return the (vid, pid) to match: config/env override, else any PID."""
+    cfg = read_config()
+    vid = cfg.get("vendor_id") or VENDOR_ID
+    pid = cfg.get("product_id", "")
+    return vid.lower(), pid.lower().lstrip("#")
+
+
 def find_device():
     """Return the /dev/hidraw* node of the GIGABYTE LampArray interface."""
+    vid, pid = _wanted_ids()
     for dev in glob.glob("/sys/class/hidraw/hidraw*/device"):
         try:
             with open(os.path.join(dev, "uevent")) as fh:
                 uevent = fh.read()
-            if f"0000{VENDOR_ID}:0000{PRODUCT_ID}" not in uevent.upper():
+            dev_vid, dev_pid = _scan_uevent_id(uevent)
+            if dev_vid != vid or (pid and dev_pid != pid):
                 continue
-            with open(os.path.join(dev, "report_descriptor"), "rb") as fh:
-                rd = fh.read()
-            if b"\x05\x59" in rd:  # Usage Page 0x59 = Lighting and Illumination
-                return "/dev/" + os.path.basename(os.path.dirname(dev))
+            if not _has_lamparray(os.path.join(dev, "report_descriptor")):
+                continue
+            return "/dev/" + os.path.basename(os.path.dirname(dev))
         except OSError:
             continue
-    sys.exit("Error: GIGABYTE LampArray (0414:8105) device not found")
+    sys.exit(f"Error: GIGABYTE LampArray ({vid}:{pid or 'any'}) device not found")
 
 
 def get_feature_report(fd, report_id, size):
@@ -146,6 +190,8 @@ def read_config():
         "intensity": str(DEFAULT_INTENSITY),
         "startup_color": STARTUP_COLOR,
         "startup_intensity": str(STARTUP_INTENSITY),
+        "vendor_id": VENDOR_ID,
+        "product_id": "",
     }
     try:
         with open(CONFIG_PATH) as fh:
@@ -156,6 +202,11 @@ def read_config():
                     cfg[k.strip()] = v.strip()
     except OSError:
         pass
+    # Allow overrides from environment variables
+    if os.environ.get("GIGABYTE_KBD_VID"):
+        cfg["vendor_id"] = os.environ["GIGABYTE_KBD_VID"]
+    if os.environ.get("GIGABYTE_KBD_PID"):
+        cfg["product_id"] = os.environ["GIGABYTE_KBD_PID"]
     return cfg
 
 
@@ -163,8 +214,17 @@ def write_config(color, intensity, startup_color=None, startup_intensity=None):
     directory = os.path.dirname(CONFIG_PATH)
     if directory:
         os.makedirs(directory, exist_ok=True)
+    cfg = read_config()
+    vid = cfg.get("vendor_id") or VENDOR_ID
+    pid = cfg.get("product_id", "")
+    if not pid:
+        det_vid, det_pid = detect_ids()
+        vid = vid or det_vid
+        pid = det_pid or ""
     with open(CONFIG_PATH, "w") as fh:
         fh.write("# GIGABYTE GAMING A16 keyboard backlight\n")
+        fh.write("vendor_id={}\n".format(vid))
+        fh.write("product_id={}\n".format(pid))
         fh.write("color={}\n".format(color))
         fh.write("intensity={}\n".format(intensity))
         fh.write("startup_color={}\n".format(
@@ -279,6 +339,7 @@ def main():
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("info", help="show lamp array attributes")
+    sub.add_parser("detect", help="print detected VID and PID")
     sub.add_parser("on", help="turn backlight on (white, full)")
     sub.add_parser("off", help="turn backlight off")
     sub.add_parser("auto", help="enable autonomous (firmware) mode, Fn+Space works")
@@ -303,9 +364,15 @@ def main():
     )
 
     args = parser.parse_args()
-    {"info": cmd_info, "on": cmd_on, "off": cmd_off, "color": cmd_color,
-     "restore": cmd_restore, "auto": cmd_auto,
-     "startup": cmd_startup}[args.command](args)
+    if args.command == "detect":
+        vid, pid = detect_ids()
+        if not vid or not pid:
+            sys.exit("Error: GIGABYTE LampArray device not found")
+        print(f"{vid} {pid}")
+    else:
+        {"info": cmd_info, "on": cmd_on, "off": cmd_off, "color": cmd_color,
+         "restore": cmd_restore, "auto": cmd_auto,
+         "startup": cmd_startup}[args.command](args)
 
 
 if __name__ == "__main__":

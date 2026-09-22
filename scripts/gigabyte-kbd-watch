@@ -38,18 +38,20 @@ def load_tool():
     return mod
 
 
-def find_input_nodes():
+def find_input_nodes(vid, pid):
+    """Find input event nodes for the GIGABYTE keyboard's VID:PID."""
+    target_key = f"{vid}:{pid}" if pid else vid
     nodes = []
     for ev in sorted(__import__("glob").glob("/dev/input/event*")):
         try:
             target = os.path.realpath(
                 f"/sys/class/input/{os.path.basename(ev)}/device/device")
-            if "0414:8105" in target:
+            if target_key in target:
                 nodes.append(ev)
         except OSError:
             continue
     if not nodes:
-        sys.exit("Error: no GIGABYTE keyboard input devices found")
+        sys.exit(f"Error: no GIGABYTE keyboard input devices found ({target_key})")
     return nodes
 
 
@@ -75,7 +77,10 @@ def apply_intensity(mod, intensity):
 
 def main():
     mod = load_tool()
-    nodes = find_input_nodes()
+    vid, pid = mod.detect_ids()
+    if not vid:
+        sys.exit("Error: GIGABYTE LampArray device not found")
+    nodes = find_input_nodes(vid, pid)
     print("watching:", ", ".join(nodes), flush=True)
 
     cfg = mod.read_config()

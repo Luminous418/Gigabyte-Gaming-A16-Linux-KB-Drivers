@@ -19,7 +19,18 @@ echo "Installed $BIN"
 
 install -Dm644 "$SCRIPT_DIR/udev/99-gigabyte-kbd.rules" \
     "$UDEV_RULES_DIR/99-gigabyte-kbd.rules"
-echo "Installed udev rule"
+echo "Installed udev rule (PIDs: 8105, 8104)"
+
+# Try to detect the actual device ID at install time
+if ids=$("$BIN" detect 2>/dev/null); then
+    vid=$(echo "$ids" | awk '{print $1}')
+    pid=$(echo "$ids" | awk '{print $2}')
+    echo "Detected device: $vid:$pid"
+else
+    echo "Device not detected at install time (using fallback PIDs)"
+    vid="0414"
+    pid="8105"
+fi
 udevadm control --reload-rules
 udevadm trigger
 echo "Reloaded udev rules"
@@ -31,9 +42,11 @@ echo "Installed user systemd unit (login restore)"
 install -Dm644 "$SCRIPT_DIR/systemd/gigabyte-kbd-resume.service" \
     "$SYSTEMD_SYSTEM_DIR/gigabyte-kbd-resume.service"
 if [[ ! -f "$MACHINE_CONFIG" ]]; then
-    cat > "$MACHINE_CONFIG" <<'EOF'
+    cat > "$MACHINE_CONFIG" <<EOF
 # GIGABYTE GAMING A16 keyboard backlight default (used on resume)
-color=00aaff
+vendor_id=$vid
+product_id=$pid
+color=00ffff
 intensity=255
 startup_color=00aaff
 startup_intensity=255
@@ -63,8 +76,8 @@ fi
 echo
 echo "--- Testing ---"
 "$BIN" info
-"$BIN" color ffffff
-echo "Backlight should be ON (white, host mode - autonomous NOT touched)."
+"$BIN" color 00ffff
+echo "Backlight should be ON (cyan, host mode - autonomous NOT touched)."
 echo "Try:"
 echo "  $BIN color ff0000       # red (host mode, exact color)"
 echo "  $BIN color ff0000 --auto   # red + autonomous (Fn+Space cycles)"
